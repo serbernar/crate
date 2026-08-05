@@ -219,3 +219,4 @@ __marimo__/
 
 # spotify-triage local state
 .venv/
+dev.db
