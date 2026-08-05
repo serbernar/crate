@@ -2,18 +2,18 @@ import sqlite3
 
 import pytest
 
-from spotify_triage import db
+from crate import db
 
 
 @pytest.fixture()
 def conn(tmp_path):
-    c = db.open_db(tmp_path / "triage.db")
+    c = db.open_db(tmp_path / "crate.db")
     yield c
     c.close()
 
 
 def test_migration_is_idempotent(tmp_path):
-    path = tmp_path / "triage.db"
+    path = tmp_path / "crate.db"
     c = db.connect(path)
     assert db.migrate(c) == (0, db.SCHEMA_VERSION)
     assert db.migrate(c) == (db.SCHEMA_VERSION, db.SCHEMA_VERSION)

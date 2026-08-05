@@ -19,7 +19,7 @@ def cmd_migrate(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="spotify-triage")
+    parser = argparse.ArgumentParser(prog="crate")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_migrate = sub.add_parser("migrate", help="create or upgrade the local database")

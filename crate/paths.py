@@ -5,8 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-ENV_HOME = "SPOTIFY_TRIAGE_HOME"
-DEFAULT_HOME = Path.home() / ".config" / "spotify-triage"
+ENV_HOME = "CRATE_HOME"
+DEFAULT_HOME = Path.home() / ".config" / "crate"
 
 
 def home() -> Path:
@@ -22,7 +22,7 @@ def ensure_home() -> Path:
 
 
 def db_path() -> Path:
-    return home() / "triage.db"
+    return home() / "crate.db"
 
 
 def config_path() -> Path:
