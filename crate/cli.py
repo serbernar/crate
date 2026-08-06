@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import click
 
-from . import api, auth, config, db, paths, sync as sync_mod
+from . import api, auth, config, db, paths, stats as stats_mod, sync as sync_mod
 from .config import ConfigError
 
 
@@ -99,6 +99,23 @@ def sync(full: bool) -> None:
     click.echo(f"genres filled: {result.genres_filled}")
     if result.skipped_local:
         click.echo(f"skipped (local or unavailable): {result.skipped_local}")
+
+
+@cli.command()
+def stats() -> None:
+    """Show how many tracks are pending, sorted and skipped."""
+    try:
+        cfg = config.load()
+    except ConfigError:
+        cfg = None  # counts do not need a config, only playlist names do
+    engine, factory = db.open_db()
+    try:
+        with factory() as session:
+            report = stats_mod.collect(session, cfg)
+    finally:
+        engine.dispose()
+    for line in stats_mod.render(report):
+        click.echo(line)
 
 
 @cli.command()

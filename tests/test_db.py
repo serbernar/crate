@@ -95,3 +95,22 @@ def test_json_columns_round_trip(track_session):
     track_session.expire_all()
     assert track_session.get(Track, "t1").genres == ["techno", "minimal techno"]
     assert track_session.get(Track, "t1").artist_ids == ["a1"]
+
+
+def test_null_genres_are_sql_null_not_json_null(session):
+    """`IS NULL` must find a track whose genres were cleared through the ORM."""
+    from sqlalchemy import select
+
+    session.add(
+        Track(
+            track_id="t1",
+            artist_ids=[],
+            title="T",
+            artist_name="A",
+            added_at=datetime(2024, 1, 1),
+            genres=None,
+            synced_at=datetime(2024, 1, 2),
+        )
+    )
+    session.commit()
+    assert session.scalars(select(Track.track_id).where(Track.genres.is_(None))).all() == ["t1"]

@@ -65,8 +65,12 @@ class Track(Base):
     artist_name: Mapped[str] = mapped_column(Text, nullable=False)
     added_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     # NULL until the artists behind the track have been fetched; [] means the
-    # artists are known and carry no genres.
-    genres: Mapped[list[str] | None] = mapped_column("genres_json", JSON)
+    # artists are known and carry no genres. none_as_null keeps a Python None
+    # written through the ORM as a real SQL NULL - by default JSON stores it as
+    # the JSON value 'null', which no `IS NULL` query would ever find.
+    genres: Mapped[list[str] | None] = mapped_column(
+        "genres_json", JSON(none_as_null=True)
+    )
     synced_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
     __table_args__ = (Index("ix_tracks_added_at", "added_at"),)
