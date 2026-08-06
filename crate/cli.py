@@ -2,8 +2,21 @@ from __future__ import annotations
 
 import click
 
-from . import api, auth, config, db, paths, stats as stats_mod, sync as sync_mod
+from . import api, auth, config, db, paths, stats as stats_mod, sync as sync_mod, triage as triage_mod
 from .config import ConfigError
+
+
+class ClickTerminal:
+    """Terminal for triage: one keystroke at a time, no Enter needed."""
+
+    def read_key(self) -> str:
+        return click.getchar()
+
+    def write(self, line: str = "") -> None:
+        click.echo(line)
+
+    def clear(self) -> None:
+        click.clear()
 
 
 def _load_config() -> config.Config:
@@ -99,6 +112,25 @@ def sync(full: bool) -> None:
     click.echo(f"genres filled: {result.genres_filled}")
     if result.skipped_local:
         click.echo(f"skipped (local or unavailable): {result.skipped_local}")
+
+
+@cli.command()
+@click.option("--oldest-first", is_flag=True, help="start from the oldest likes instead of the newest")
+def triage(oldest_first: bool) -> None:
+    """Sort pending tracks into playlists, one keystroke at a time."""
+    cfg = _load_config()
+    if not cfg.playlists:
+        raise click.ClickException("no playlists in config - add [[playlists]] entries first")
+    engine, factory = db.open_db()
+    try:
+        with factory() as session:
+            summary = triage_mod.run(session, cfg, ClickTerminal(), oldest_first=oldest_first)
+    finally:
+        engine.dispose()
+    click.echo("")
+    click.echo(f"sorted {summary.sorted}, skipped {summary.skipped}, undone {summary.undone}")
+    if not summary.quit:
+        click.echo("nothing left to triage")
 
 
 @cli.command()
