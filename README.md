@@ -36,6 +36,6 @@ decision is saved as it is made.
     playlist = "1"
 
 Rules match genre substrings case-insensitively, in file order, first match
-wins; no match means no suggestion. Scopes are `user-library-read`,
-`playlist-read-private`, `playlist-modify-private` — nothing is ever removed
-from Liked Songs and `user-library-modify` is not requested.
+wins; no match means no suggestion. Scopes: `user-library-read`,
+`playlist-read-private`, `playlist-modify-private`. Nothing is ever removed
+from Liked Songs. Spotify's API cannot see or create playlist folders.
