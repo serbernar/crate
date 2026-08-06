@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import click
 
-from . import auth, config, db, paths
+from . import api, auth, config, db, paths, sync as sync_mod
 from .config import ConfigError
 
 
@@ -74,6 +74,31 @@ def whoami() -> None:
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(f"account: {profile.get('display_name') or profile['id']} ({profile['id']})")
+
+
+@cli.command()
+@click.option("--full", is_flag=True, help="walk the whole library instead of stopping at the first known track")
+def sync(full: bool) -> None:
+    """Pull new Liked Songs and the genres of their artists."""
+    cfg = _load_config()
+    paths.ensure_home()
+    engine, factory = db.open_db()
+    try:
+        client = api.connect(cfg, on_wait=lambda s: click.echo(f"rate limited, waiting {s}s"))
+    except auth.NotAuthenticated as exc:
+        raise click.ClickException(str(exc)) from exc
+    try:
+        with factory() as session:
+            result = sync_mod.sync(session, client, full=full, progress=click.echo)
+    except api.RateLimited as exc:
+        raise click.ClickException(str(exc)) from exc
+    finally:
+        engine.dispose()
+    click.echo(f"tracks added: {result.new_tracks}")
+    click.echo(f"artists fetched: {result.artists_fetched}")
+    click.echo(f"genres filled: {result.genres_filled}")
+    if result.skipped_local:
+        click.echo(f"skipped (local or unavailable): {result.skipped_local}")
 
 
 @cli.command()

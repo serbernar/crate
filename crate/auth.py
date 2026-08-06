@@ -100,12 +100,12 @@ def cached_token(manager: SpotifyPKCE) -> dict | None:
     return manager.validate_token(manager.cache_handler.get_cached_token())
 
 
-def client(cfg: Config, cache: CacheHandler | None = None) -> spotipy.Spotify:
+def client(cfg: Config, cache: CacheHandler | None = None, **kwargs) -> spotipy.Spotify:
     """Authenticated client for a token obtained earlier. Refreshes silently."""
     manager = auth_manager(cfg, cache=cache, open_browser=False)
     if cached_token(manager) is None:
         raise NotAuthenticated("not authenticated - run `crate login`")
-    return spotipy.Spotify(auth_manager=manager)
+    return spotipy.Spotify(auth_manager=manager, **kwargs)
 
 
 def token_status(cache: CacheHandler | None = None) -> dict | None:
