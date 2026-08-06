@@ -17,6 +17,7 @@ from .config import Config
 SAVED_TRACKS_PAGE = 50
 ARTISTS_BATCH = 50          # /v1/artists accepts at most 50 ids
 PLAYLIST_ADD_BATCH = 100    # /v1/playlists/{id}/tracks accepts at most 100 uris
+PLAYLIST_PAGE = 100         # page size when reading a playlist back
 
 # 429 is handled here rather than by spotipy's urllib3 retry, which would sleep
 # for whatever Retry-After says without telling anyone.
@@ -84,6 +85,47 @@ class Client:
             if not page.get("next"):
                 return
             offset += len(items)
+
+    def playlist_track_ids(self, playlist_id: str) -> set[str]:
+        """Every track already in the playlist.
+
+        This is what makes apply idempotent: the playlist itself is the truth,
+        so a re-run adds nothing even if the local database was lost.
+        """
+        found: set[str] = set()
+        offset = 0
+        while True:
+            page = self.call(
+                self.sp.playlist_items,
+                playlist_id,
+                fields="items(track(id)),next",
+                limit=PLAYLIST_PAGE,
+                offset=offset,
+                additional_types=("track",),
+            )
+            items = page.get("items") or []
+            for item in items:
+                track = item.get("track") or {}
+                if track.get("id"):
+                    found.add(track["id"])
+            if not items or not page.get("next"):
+                return found
+            offset += len(items)
+
+    def add_tracks(self, playlist_id: str, track_ids: list[str]) -> Iterator[list[str]]:
+        """Add tracks in batches, yielding each batch after it lands.
+
+        The caller records what has been written between batches, so an
+        interruption leaves the database agreeing with Spotify.
+        """
+        for i in range(0, len(track_ids), PLAYLIST_ADD_BATCH):
+            batch = track_ids[i : i + PLAYLIST_ADD_BATCH]
+            self.call(
+                self.sp.playlist_add_items,
+                playlist_id,
+                [f"spotify:track:{t}" for t in batch],
+            )
+            yield batch
 
     def artists(self, artist_ids: list[str]) -> Iterator[dict]:
         for i in range(0, len(artist_ids), ARTISTS_BATCH):

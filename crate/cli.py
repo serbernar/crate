@@ -2,7 +2,17 @@ from __future__ import annotations
 
 import click
 
-from . import api, auth, config, db, paths, stats as stats_mod, sync as sync_mod, triage as triage_mod
+from . import (
+    api,
+    apply as apply_mod,
+    auth,
+    config,
+    db,
+    paths,
+    stats as stats_mod,
+    sync as sync_mod,
+    triage as triage_mod,
+)
 from .config import ConfigError
 
 
@@ -133,6 +143,43 @@ def triage(oldest_first: bool) -> None:
     click.echo(f"sorted {summary.sorted}, skipped {summary.skipped}, undone {summary.undone}")
     if not summary.quit:
         click.echo("nothing left to triage")
+
+
+@cli.command()
+@click.option("--commit", is_flag=True, help="actually write to Spotify")
+@click.option("--dry-run", is_flag=True, help="print the plan and write nothing (the default)")
+def apply(commit: bool, dry_run: bool) -> None:
+    """Put sorted tracks into their playlists on Spotify."""
+    if commit and dry_run:
+        raise click.ClickException("--commit and --dry-run contradict each other")
+    cfg = _load_config()
+    paths.ensure_home()
+    engine, factory = db.open_db()
+    try:
+        client = api.connect(cfg, on_wait=lambda s: click.echo(f"rate limited, waiting {s}s"))
+    except auth.NotAuthenticated as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    try:
+        with factory() as session:
+            plan = apply_mod.build_plan(session, client, cfg)
+            for line in apply_mod.render(plan, committing=commit):
+                click.echo(line)
+            if not commit:
+                return
+            click.echo("")
+            result = apply_mod.execute(session, client, plan, progress=click.echo)
+    except api.RateLimited as exc:
+        raise click.ClickException(str(exc)) from exc
+    finally:
+        engine.dispose()
+
+    click.echo("")
+    click.echo(f"added {result.added} in {result.calls} calls, "
+               f"{result.confirmed} were already there")
+    click.echo(f"log: {paths.write_log_path()}")
+    if result.failed:
+        raise click.ClickException(f"{len(result.failed)} playlists failed: {', '.join(result.failed)}")
 
 
 @cli.command()
