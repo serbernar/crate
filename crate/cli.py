@@ -8,6 +8,7 @@ from . import (
     auth,
     config,
     db,
+    learn as learn_mod,
     paths,
     stats as stats_mod,
     sync as sync_mod,
@@ -127,6 +128,30 @@ def sync(full: bool) -> None:
 
 
 @cli.command()
+def learn() -> None:
+    """Read the configured playlists and remember what is already in them."""
+    cfg = _load_config()
+    if not cfg.playlists:
+        raise click.ClickException("no playlists in config - add [[playlists]] entries first")
+    paths.ensure_home()
+    engine, factory = db.open_db()
+    try:
+        client = api.connect(cfg, on_wait=lambda s: click.echo(f"rate limited, waiting {s}s"))
+    except auth.NotAuthenticated as exc:
+        raise click.ClickException(str(exc)) from exc
+    try:
+        with factory() as session:
+            result = learn_mod.learn(session, client, cfg, progress=click.echo)
+    except api.RateLimited as exc:
+        raise click.ClickException(str(exc)) from exc
+    finally:
+        engine.dispose()
+    click.echo("")
+    for line in learn_mod.render(result):
+        click.echo(line)
+
+
+@cli.command()
 @click.option("--oldest-first", is_flag=True, help="start from the oldest likes instead of the newest")
 def triage(oldest_first: bool) -> None:
     """Sort pending tracks into playlists, one keystroke at a time."""
@@ -136,7 +161,9 @@ def triage(oldest_first: bool) -> None:
     engine, factory = db.open_db()
     try:
         with factory() as session:
-            summary = triage_mod.run(session, cfg, ClickTerminal(), oldest_first=oldest_first)
+            summary = triage_mod.run(
+                session, cfg, ClickTerminal(), oldest_first=oldest_first
+            )
     finally:
         engine.dispose()
     click.echo("")

@@ -112,6 +112,27 @@ class Client:
                 return found
             offset += len(items)
 
+    def playlist_tracks(self, playlist_id: str) -> Iterator[dict]:
+        """Every track in the playlist with the artists behind it."""
+        offset = 0
+        while True:
+            page = self.call(
+                self.sp.playlist_items,
+                playlist_id,
+                fields="items(track(id,artists(id,name))),next",
+                limit=PLAYLIST_PAGE,
+                offset=offset,
+                additional_types=("track",),
+            )
+            items = page.get("items") or []
+            for item in items:
+                track = item.get("track") or {}
+                if track.get("id"):
+                    yield track
+            if not items or not page.get("next"):
+                return
+            offset += len(items)
+
     def add_tracks(self, playlist_id: str, track_ids: list[str]) -> Iterator[list[str]]:
         """Add tracks in batches, yielding each batch after it lands.
 

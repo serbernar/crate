@@ -133,6 +133,36 @@ class Assignment(Base):
     __table_args__ = (Index("ix_assignments_playlist_id", "playlist_id"),)
 
 
+class PlaylistArtist(Base):
+    """How many tracks by one artist a playlist already holds.
+
+    Learned from the playlists themselves, so a suggestion can be justified by
+    what the user has already put there rather than by a genre string.
+    """
+
+    __tablename__ = "playlist_artists"
+
+    playlist_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    artist_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    tracks: Mapped[int] = mapped_column(Integer, nullable=False)
+    learned_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (Index("ix_playlist_artists_artist_id", "artist_id"),)
+
+
+class PlaylistGenre(Base):
+    """How many tracks carrying one genre a playlist already holds."""
+
+    __tablename__ = "playlist_genres"
+
+    playlist_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    genre: Mapped[str] = mapped_column(Text, primary_key=True)
+    tracks: Mapped[int] = mapped_column(Integer, nullable=False)
+    learned_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (Index("ix_playlist_genres_genre", "genre"),)
+
+
 class Artist(Base):
     __tablename__ = "artists"
 

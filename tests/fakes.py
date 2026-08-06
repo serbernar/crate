@@ -78,9 +78,14 @@ class FakePlaylists(FakeSpotify):
         if playlist_id in self.read_errors:
             raise self.read_errors[playlist_id]
         ids = self.contents.get(playlist_id, [])
+        # playlist_detail carries the artists behind each track when a test
+        # needs them; otherwise a bare id is enough.
+        detail = {t["id"]: t for t in getattr(self, "playlist_detail", {}).get(playlist_id, [])}
         window = ids[offset : offset + limit]
         return {
-            "items": [{"track": {"id": track_id}} for track_id in window],
+            "items": [
+                {"track": detail.get(track_id, {"id": track_id})} for track_id in window
+            ],
             "next": "url" if offset + limit < len(ids) else None,
         }
 

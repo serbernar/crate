@@ -84,19 +84,19 @@ class FakeTerminal:
 
 def test_first_matching_rule_wins():
     cfg = make_config([Rule("techno", "pl_techno"), Rule("acid", "pl_jazz")])
-    assert triage.suggest(cfg, ["acid techno"]).playlist_id == "pl_techno"
+    assert triage.suggest(cfg, ["acid techno"]).playlist.playlist_id == "pl_techno"
 
 
 def test_rule_order_decides_between_overlapping_rules():
     cfg = make_config([Rule("deep house", "pl_jazz"), Rule("house", "pl_techno")])
-    assert triage.suggest(cfg, ["deep house"]).playlist_id == "pl_jazz"
+    assert triage.suggest(cfg, ["deep house"]).playlist.playlist_id == "pl_jazz"
     reversed_cfg = make_config([Rule("house", "pl_techno"), Rule("deep house", "pl_jazz")])
-    assert triage.suggest(reversed_cfg, ["deep house"]).playlist_id == "pl_techno"
+    assert triage.suggest(reversed_cfg, ["deep house"]).playlist.playlist_id == "pl_techno"
 
 
 def test_matching_is_a_case_insensitive_substring():
     cfg = make_config([Rule("techno", "pl_techno")])
-    assert triage.suggest(cfg, ["Minimal Techno"]).playlist_id == "pl_techno"
+    assert triage.suggest(cfg, ["Minimal Techno"]).playlist.playlist_id == "pl_techno"
 
 
 def test_no_match_means_no_suggestion():
@@ -255,7 +255,7 @@ def test_screen_shows_track_genres_and_suggestion(session):
     assert "Title t1" in screen
     assert "Artist" in screen
     assert "genres: minimal techno, acid" in screen
-    assert "suggested: 1 Techno" in screen
+    assert any(line.startswith("suggested: 1 Techno") for line in screen)
     assert any("1 Techno" in line and "2 Jazz" in line for line in screen)
 
 
@@ -396,3 +396,120 @@ def test_quitting_from_the_empty_screen_is_not_an_early_exit(session):
     add_tracks(session, [("t1", [])])
     summary = triage.run(session, make_config(), FakeTerminal(["s", "q"]))
     assert summary.quit is False
+
+
+# --- whole artist at once, and previewing -------------------------------------
+
+
+def add_track_by(session, track_id, artist_ids, *, artist_name="Artist", days=0):
+    session.add(
+        Track(
+            track_id=track_id,
+            artist_ids=artist_ids,
+            title=f"Title {track_id}",
+            artist_name=artist_name,
+            added_at=datetime(2024, 6, 1) - timedelta(days=days),
+            genres=[],
+            release_date="2001",
+            popularity=1,
+            synced_at=datetime(2024, 6, 1),
+        )
+    )
+    session.flush()
+    session.add(Decision(track_id=track_id, status=Status.pending))
+    session.commit()
+
+
+def test_a_applies_the_decision_to_the_whole_artist(session):
+    for i in range(3):
+        add_track_by(session, f"t{i}", ["a1"], days=i)
+    add_track_by(session, "other", ["a2"], days=9)
+
+    summary = triage.run(session, make_config(), FakeTerminal(["1", "a", "s"]))
+
+    for i in range(3):
+        assert playlists_of(session, f"t{i}") == {"pl_techno"}
+    assert session.get(Decision, "other").status is Status.skipped
+    assert (summary.sorted, summary.assignments) == (3, 3)
+
+
+def test_a_offers_the_count_of_siblings(session):
+    for i in range(3):
+        add_track_by(session, f"t{i}", ["a1"], days=i)
+    term = FakeTerminal(["q"])
+    triage.run(session, make_config(), term)
+    assert any("a apply to 2 more tracks by this artist" in line for line in term.screens[0])
+
+
+def test_a_is_not_offered_without_siblings(session):
+    add_track_by(session, "t1", ["a1"])
+    term = FakeTerminal(["q"])
+    triage.run(session, make_config(), term)
+    assert not any("by this artist" in line for line in term.screens[0])
+
+
+def test_a_without_siblings_says_so(session):
+    add_track_by(session, "t1", ["a1"])
+    term = FakeTerminal(["1", "a", "q"])
+    triage.run(session, make_config(), term)
+    assert "no other pending tracks by this artist" in term.text()
+    assert session.get(Decision, "t1").status is Status.pending
+
+
+def test_a_matches_any_shared_artist(session):
+    add_track_by(session, "solo", ["a1"], days=0)
+    add_track_by(session, "feat", ["a2", "a1"], days=1)
+    add_track_by(session, "unrelated", ["a3"], days=2)
+
+    triage.run(session, make_config(), FakeTerminal(["1", "a", "s"]))
+
+    assert playlists_of(session, "feat") == {"pl_techno"}
+    assert session.get(Decision, "unrelated").status is Status.skipped
+
+
+def test_a_can_be_undone_one_track_at_a_time(session):
+    for i in range(2):
+        add_track_by(session, f"t{i}", ["a1"], days=i)
+    summary = triage.run(session, make_config(), FakeTerminal(["1", "a", "u", "q"]))
+
+    assert playlists_of(session, "t1") == set()  # the sibling was undone
+    assert playlists_of(session, "t0") == {"pl_techno"}
+    assert (summary.sorted, summary.undone) == (1, 1)
+
+
+def test_a_only_takes_pending_tracks(session):
+    for i in range(3):
+        add_track_by(session, f"t{i}", ["a1"], days=i)
+    triage.run(session, make_config(), FakeTerminal(["s"]))  # t0 skipped, rest pending
+
+    triage.run(session, make_config(), FakeTerminal(["2", "a"]))
+
+    assert playlists_of(session, "t1") == {"pl_jazz"}
+    assert playlists_of(session, "t2") == {"pl_jazz"}
+    assert session.get(Decision, "t0").status is Status.skipped  # untouched
+    assert playlists_of(session, "t0") == set()
+
+
+def test_p_opens_the_track_without_deciding(session):
+    add_track_by(session, "t1", ["a1"])
+    opened: list[str] = []
+    term = FakeTerminal(["p", "q"])
+
+    triage.run(session, make_config(), term, player=opened.append)
+
+    assert opened == ["t1"]
+    assert session.get(Decision, "t1").status is Status.pending
+    assert "opened Title t1 in Spotify" in term.text()
+
+
+def test_p_is_offered_on_screen(session):
+    add_track_by(session, "t1", ["a1"])
+    term = FakeTerminal(["q"])
+    triage.run(session, make_config(), term)
+    assert any("p play" in line for line in term.screens[0])
+
+
+def test_open_in_spotify_builds_a_track_uri():
+    seen: list[str] = []
+    triage.open_in_spotify("abc123", opener=seen.append)
+    assert seen == ["spotify:track:abc123"]
