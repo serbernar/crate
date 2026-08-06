@@ -17,6 +17,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Index,
+    Integer,
     MetaData,
     Text,
 )
@@ -71,9 +72,20 @@ class Track(Base):
     genres: Mapped[list[str] | None] = mapped_column(
         "genres_json", JSON(none_as_null=True)
     )
+    # As Spotify sends it: "1998", "1998-05" or "1998-05-21". Precision varies
+    # per release, so the raw string is kept and the year read off the front.
+    release_date: Mapped[str | None] = mapped_column(Text)
+    popularity: Mapped[int | None] = mapped_column(Integer)
     synced_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
     __table_args__ = (Index("ix_tracks_added_at", "added_at"),)
+
+    @property
+    def release_year(self) -> int | None:
+        try:
+            return int((self.release_date or "")[:4])
+        except ValueError:
+            return None
 
 
 class Playlist(Base):
@@ -85,23 +97,40 @@ class Playlist(Base):
 
 
 class Decision(Base):
+    """Where a track stands: still to look at, sorted, or deliberately skipped.
+
+    Which playlists a sorted track goes to lives in Assignment - a track can
+    belong to several at once (a song can be both gym and party).
+    """
+
     __tablename__ = "decisions"
 
     track_id: Mapped[str] = mapped_column(
         ForeignKey("tracks.track_id", ondelete="CASCADE"), primary_key=True
     )
     status: Mapped[Status] = mapped_column(StatusType, nullable=False)
-    playlist_id: Mapped[str | None] = mapped_column(Text)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     __table_args__ = (
         CheckConstraint(f"status IN ({STATUS_VALUES})", name="status_values"),
-        CheckConstraint(
-            "(status = 'sorted') = (playlist_id IS NOT NULL)",
-            name="sorted_has_playlist",
-        ),
         Index("ix_decisions_status", "status"),
     )
+
+
+class Assignment(Base):
+    """One track going into one playlist. Rows exist only for sorted tracks."""
+
+    __tablename__ = "assignments"
+
+    track_id: Mapped[str] = mapped_column(
+        ForeignKey("tracks.track_id", ondelete="CASCADE"), primary_key=True
+    )
+    playlist_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    decided_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    # Set by apply once the track is actually in the playlist on Spotify.
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+    __table_args__ = (Index("ix_assignments_playlist_id", "playlist_id"),)
 
 
 class Artist(Base):

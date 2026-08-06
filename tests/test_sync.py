@@ -5,7 +5,7 @@ import spotipy
 from sqlalchemy import select
 
 from crate import api, db, sync
-from crate.models import Artist, Decision, Status, Track
+from crate.models import Artist, Assignment, Decision, Status, Track
 from tests.fakes import FakeSpotify, local_item, track_item
 
 
@@ -88,15 +88,16 @@ def test_resync_does_not_reset_decisions(session):
     session.get(Decision, "t0").status = Status.skipped
     decision = session.get(Decision, "t1")
     decision.status = Status.sorted
-    decision.playlist_id = "pl_techno"
     decision.decided_at = datetime(2024, 6, 1)
+    session.add(Assignment(track_id="t1", playlist_id="pl_techno", decided_at=datetime(2024, 6, 1)))
     session.commit()
 
     sync.sync(session, client_for(FakeSpotify(items, artists={"a1": []})), full=True)
 
     session.expire_all()
     assert session.get(Decision, "t0").status is Status.skipped
-    assert session.get(Decision, "t1").playlist_id == "pl_techno"
+    assert session.get(Decision, "t1").status is Status.sorted
+    assert session.get(Assignment, ("t1", "pl_techno")) is not None
 
 
 def test_local_and_unavailable_tracks_are_skipped(session):
@@ -206,3 +207,64 @@ def test_non_rate_limit_errors_are_not_retried(session):
     with pytest.raises(spotipy.SpotifyException):
         sync.sync(session, client_for(sp))
     assert len(sp.page_calls) == 1
+
+
+def test_release_date_and_popularity_are_stored(session):
+    sp = FakeSpotify(
+        [track_item("t0", "2024-06-01T00:00:00Z", release_date="1998-05-21", popularity=73)],
+        artists={"a1": []},
+    )
+    sync.sync(session, client_for(sp))
+    track = session.get(Track, "t0")
+    assert (track.release_date, track.popularity, track.release_year) == ("1998-05-21", 73, 1998)
+
+
+def test_partial_release_dates_still_yield_a_year(session):
+    sp = FakeSpotify(
+        [track_item("t0", "2024-06-01T00:00:00Z", release_date="1975")], artists={"a1": []}
+    )
+    sync.sync(session, client_for(sp))
+    assert session.get(Track, "t0").release_year == 1975
+
+
+def test_missing_release_date_is_tolerated(session):
+    sp = FakeSpotify(
+        [track_item("t0", "2024-06-01T00:00:00Z", release_date=None, popularity=None)],
+        artists={"a1": []},
+    )
+    sync.sync(session, client_for(sp))
+    track = session.get(Track, "t0")
+    assert (track.release_date, track.popularity, track.release_year) == (None, None, None)
+
+
+def test_full_refreshes_metadata_on_known_tracks(session):
+    """The only way to backfill fields added after a track was first synced."""
+    sp = FakeSpotify(
+        [track_item("t0", "2024-06-01T00:00:00Z", release_date="1998", popularity=10)],
+        artists={"a1": []},
+    )
+    sync.sync(session, client_for(sp))
+
+    sp2 = FakeSpotify(
+        [track_item("t0", "2024-06-01T00:00:00Z", release_date="1999-02-01", popularity=88)],
+        artists={"a1": []},
+    )
+    result = sync.sync(session, client_for(sp2), full=True)
+
+    session.expire_all()
+    track = session.get(Track, "t0")
+    assert (track.release_date, track.popularity) == ("1999-02-01", 88)
+    assert (result.new_tracks, result.refreshed) == (0, 1)
+
+
+def test_refreshing_does_not_touch_genres_or_decisions(session):
+    sp = FakeSpotify(library(1), artists={"a1": ["techno"]})
+    sync.sync(session, client_for(sp))
+    session.get(Decision, "t0").status = Status.skipped
+    session.commit()
+
+    sync.sync(session, client_for(FakeSpotify(library(1), artists={"a1": ["techno"]})), full=True)
+
+    session.expire_all()
+    assert session.get(Track, "t0").genres == ["techno"]
+    assert session.get(Decision, "t0").status is Status.skipped

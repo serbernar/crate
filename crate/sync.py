@@ -30,6 +30,7 @@ class SyncResult:
     pages: int = 0
     seen: int = 0
     new_tracks: int = 0
+    refreshed: int = 0
     skipped_local: int = 0
     stopped_early: bool = False
     artists_fetched: int = 0
@@ -55,6 +56,8 @@ def track_row(item: dict, now: datetime) -> dict | None:
         "title": track.get("name") or track_id,
         "artist_name": ", ".join(a.get("name") or "" for a in artists),
         "added_at": parse_added_at(item["added_at"]),
+        "release_date": (track.get("album") or {}).get("release_date"),
+        "popularity": track.get("popularity"),
         "synced_at": now,
     }
 
@@ -82,6 +85,8 @@ def store_page(session: Session, rows: list[dict]) -> None:
                 "title": insert(Track).excluded.title,
                 "artist_name": insert(Track).excluded.artist_name,
                 "added_at": insert(Track).excluded.added_at,
+                "release_date": insert(Track).excluded.release_date,
+                "popularity": insert(Track).excluded.popularity,
                 "synced_at": insert(Track).excluded.synced_at,
             },
         )
@@ -113,13 +118,18 @@ def pull_tracks(
                 if not full:
                     result.stopped_early = True
                     break
+                # --full refreshes what is already stored: it is the only way to
+                # backfill fields added after a track was first synced.
+                rows.append(row)
+                result.refreshed += 1
                 continue
             known.add(row["track_id"])
             rows.append(row)
+            result.new_tracks += 1
 
         store_page(session, rows)
-        result.new_tracks += len(rows)
-        progress(f"page {result.pages}: {len(page.get('items') or [])} seen, {len(rows)} new")
+        seen_on_page = len(page.get("items") or [])
+        progress(f"page {result.pages}: {seen_on_page} seen, {len(rows)} written")
         if result.stopped_early:
             progress("reached a track that was already known, stopping")
             break

@@ -108,6 +108,8 @@ def sync(full: bool) -> None:
     finally:
         engine.dispose()
     click.echo(f"tracks added: {result.new_tracks}")
+    if result.refreshed:
+        click.echo(f"tracks refreshed: {result.refreshed}")
     click.echo(f"artists fetched: {result.artists_fetched}")
     click.echo(f"genres filled: {result.genres_filled}")
     if result.skipped_local:

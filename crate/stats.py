@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .config import Config
-from .models import Decision, Playlist, Status, Track
+from .models import Assignment, Decision, Playlist, Status, Track
 
 
 @dataclass
@@ -19,6 +19,7 @@ class Stats:
     sorted: int = 0
     skipped: int = 0
     by_playlist: list[tuple[str, str, int]] = field(default_factory=list)
+    assignments: int = 0
     genres_missing: int = 0
     last_sync: datetime | None = None
 
@@ -47,10 +48,10 @@ def collect(session: Session, cfg: Config | None = None) -> Stats:
     ) or 0
 
     names = playlist_names(session, cfg)
+    # A track can sit in several playlists, so these counts add up to more than
+    # the number of sorted tracks.
     rows = session.execute(
-        select(Decision.playlist_id, func.count())
-        .where(Decision.status == Status.sorted)
-        .group_by(Decision.playlist_id)
+        select(Assignment.playlist_id, func.count()).group_by(Assignment.playlist_id)
     ).all()
     by_playlist = sorted(
         ((pid, names.get(pid, pid), count) for pid, count in rows),
@@ -63,6 +64,7 @@ def collect(session: Session, cfg: Config | None = None) -> Stats:
         sorted=counts.get(Status.sorted, 0),
         skipped=counts.get(Status.skipped, 0),
         by_playlist=by_playlist,
+        assignments=sum(count for _pid, _name, count in by_playlist),
         genres_missing=session.scalar(
             select(func.count()).select_from(Track).where(Track.genres.is_(None))
         ) or 0,
@@ -79,7 +81,9 @@ def render(stats: Stats) -> list[str]:
     ]
     if stats.by_playlist:
         lines.append("")
-        lines.append("sorted by playlist:")
+        extra = stats.assignments - stats.sorted
+        suffix = f" ({extra} in more than one)" if extra > 0 else ""
+        lines.append(f"sorted by playlist:{suffix}")
         width = max(len(name) for _pid, name, _c in stats.by_playlist)
         lines.extend(
             f"  {name:<{width}}  {count:>5}" for _pid, name, count in stats.by_playlist

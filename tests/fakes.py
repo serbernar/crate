@@ -5,13 +5,16 @@ from __future__ import annotations
 import spotipy
 
 
-def track_item(track_id: str, added_at: str, artists=(("a1", "Artist One"),), title=None):
+def track_item(track_id: str, added_at: str, artists=(("a1", "Artist One"),), title=None,
+               release_date="2020-01-01", popularity=50):
     return {
         "added_at": added_at,
         "track": {
             "id": track_id,
             "name": title or f"Track {track_id}",
             "is_local": False,
+            "popularity": popularity,
+            "album": {"release_date": release_date},
             "artists": [{"id": aid, "name": name} for aid, name in artists],
         },
     }

@@ -4,7 +4,7 @@ import pytest
 
 from crate import db, stats
 from crate.config import Config, PlaylistCfg
-from crate.models import Decision, Playlist, Status, Track
+from crate.models import Assignment, Decision, Playlist, Status, Track
 
 
 @pytest.fixture()
@@ -15,7 +15,8 @@ def session(tmp_path):
     engine.dispose()
 
 
-def add_track(session, track_id, *, genres=None, synced_at=datetime(2024, 6, 1), decision=None):
+def add_track(session, track_id, *, genres=None, synced_at=datetime(2024, 6, 1), decision=None,
+              playlists=()):
     session.add(
         Track(
             track_id=track_id,
@@ -30,16 +31,15 @@ def add_track(session, track_id, *, genres=None, synced_at=datetime(2024, 6, 1),
     session.flush()
     if decision is not None:
         session.add(decision)
+    for playlist_id in playlists:
+        session.add(
+            Assignment(track_id=track_id, playlist_id=playlist_id, decided_at=datetime(2024, 6, 2))
+        )
     session.commit()
 
 
-def sorted_into(track_id, playlist_id):
-    return Decision(
-        track_id=track_id,
-        status=Status.sorted,
-        playlist_id=playlist_id,
-        decided_at=datetime(2024, 6, 2),
-    )
+def sorted_decision(track_id):
+    return Decision(track_id=track_id, status=Status.sorted, decided_at=datetime(2024, 6, 2))
 
 
 def test_empty_database(session):
@@ -52,7 +52,7 @@ def test_empty_database(session):
 def test_counts_by_status(session):
     add_track(session, "t1", genres=[], decision=Decision(track_id="t1", status=Status.pending))
     add_track(session, "t2", genres=[], decision=Decision(track_id="t2", status=Status.skipped))
-    add_track(session, "t3", genres=[], decision=sorted_into("t3", "pl1"))
+    add_track(session, "t3", genres=[], decision=sorted_decision("t3"), playlists=["pl1"])
 
     report = stats.collect(session)
     assert (report.total, report.pending, report.sorted, report.skipped) == (3, 1, 1, 1)
@@ -67,8 +67,8 @@ def test_track_without_a_decision_counts_as_pending(session):
 
 def test_playlist_breakdown_uses_config_names_and_sorts_by_count(session):
     for i in range(3):
-        add_track(session, f"a{i}", genres=[], decision=sorted_into(f"a{i}", "pl_techno"))
-    add_track(session, "b0", genres=[], decision=sorted_into("b0", "pl_jazz"))
+        add_track(session, f"a{i}", genres=[], decision=sorted_decision(f"a{i}"), playlists=["pl_techno"])
+    add_track(session, "b0", genres=[], decision=sorted_decision("b0"), playlists=["pl_jazz"])
 
     cfg = Config(
         client_id="x",
@@ -82,8 +82,8 @@ def test_playlist_breakdown_uses_config_names_and_sorts_by_count(session):
 
 
 def test_playlist_name_falls_back_to_database_then_to_id(session):
-    add_track(session, "t1", genres=[], decision=sorted_into("t1", "pl_known"))
-    add_track(session, "t2", genres=[], decision=sorted_into("t2", "pl_unknown"))
+    add_track(session, "t1", genres=[], decision=sorted_decision("t1"), playlists=["pl_known"])
+    add_track(session, "t2", genres=[], decision=sorted_decision("t2"), playlists=["pl_unknown"])
     session.add(Playlist(playlist_id="pl_known", name="From DB", hotkey="1"))
     session.commit()
 
@@ -109,6 +109,6 @@ def test_last_sync_is_the_most_recent(session):
 
 
 def test_render_is_plain_text(session):
-    add_track(session, "t1", genres=[], decision=sorted_into("t1", "pl1"))
+    add_track(session, "t1", genres=[], decision=sorted_decision("t1"), playlists=["pl1"])
     for line in stats.render(stats.collect(session)):
         assert line.isascii()

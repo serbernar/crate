@@ -11,14 +11,15 @@ and run `crate migrate` and `crate login`.
 
 ## Commands
 
-    crate sync      pull new Liked Songs and their genres
-    crate triage    sort pending tracks, one keystroke each
+    crate sync      pull new Liked Songs (--full also refreshes known ones)
+    crate triage    sort pending tracks into playlists
     crate stats     pending / sorted / skipped counts
     crate init / migrate / login    setup, see above
     crate whoami / logout          inspect or drop the cached token
 
-In triage: 1-9 pick a playlist, enter accepts the suggestion, s skips,
-u undoes, q quits. Each decision is saved as it is made.
+In triage: 1-9 toggle playlists (a track can go into several), enter saves
+the selection or accepts the suggestion, s skips, u undoes, q quits. Each
+decision is saved as it is made.
 
 ## Config
 

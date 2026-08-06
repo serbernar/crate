@@ -9,15 +9,26 @@ target_metadata = Base.metadata
 
 
 def _run(connection) -> None:
+    # Batch mode rebuilds a table by copying rows into a replacement and
+    # dropping the original. With foreign keys on, that DROP performs an
+    # implicit DELETE, and any ON DELETE CASCADE wipes the referencing tables -
+    # dropping a column from `tracks` would empty `assignments`. The pragma is
+    # a no-op inside a transaction, so it goes to the driver before one opens.
+    sqlite = connection.dialect.name == "sqlite"
+    if sqlite:
+        connection.connection.dbapi_connection.execute("PRAGMA foreign_keys=OFF")
+
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
-        # SQLite cannot ALTER much; batch mode rebuilds tables instead.
         render_as_batch=True,
         compare_type=True,
     )
     with context.begin_transaction():
         context.run_migrations()
+
+    if sqlite:
+        connection.connection.dbapi_connection.execute("PRAGMA foreign_keys=ON")
 
 
 def run_migrations_offline() -> None:

@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from crate import db, triage
 from crate.config import Config, PlaylistCfg, Rule
-from crate.models import Decision, Playlist, Status, Track
+from crate.models import Assignment, Decision, Playlist, Status, Track
 
 
 @pytest.fixture()
@@ -36,12 +36,21 @@ def add_tracks(session, specs):
                 artist_name="Artist",
                 added_at=newest - timedelta(days=i),
                 genres=genres,
+                release_date="1998-05-21",
+                popularity=42,
                 synced_at=newest,
             )
         )
         session.flush()
         session.add(Decision(track_id=track_id, status=Status.pending))
     session.commit()
+
+
+def playlists_of(session, track_id):
+    session.expire_all()
+    return set(
+        session.scalars(select(Assignment.playlist_id).where(Assignment.track_id == track_id))
+    )
 
 
 class FakeTerminal:
@@ -103,11 +112,12 @@ def test_no_match_means_no_suggestion():
 
 def test_hotkey_sorts_into_that_playlist(session):
     add_tracks(session, [("t1", ["techno"])])
-    summary = triage.run(session, make_config(), FakeTerminal(["1"]))
+    summary = triage.run(session, make_config(), FakeTerminal(["1", "\r"]))
 
     decision = session.get(Decision, "t1")
-    assert (decision.status, decision.playlist_id) == (Status.sorted, "pl_techno")
+    assert decision.status is Status.sorted
     assert decision.decided_at is not None
+    assert playlists_of(session, "t1") == {"pl_techno"}
     assert summary.sorted == 1
 
 
@@ -115,14 +125,15 @@ def test_skip_records_skipped_without_a_playlist(session):
     add_tracks(session, [("t1", ["techno"])])
     triage.run(session, make_config(), FakeTerminal(["s"]))
     decision = session.get(Decision, "t1")
-    assert (decision.status, decision.playlist_id) == (Status.skipped, None)
+    assert decision.status is Status.skipped
+    assert playlists_of(session, "t1") == set()
 
 
 def test_enter_accepts_the_suggestion(session):
     add_tracks(session, [("t1", ["minimal techno"])])
     cfg = make_config([Rule("techno", "pl_techno")])
     triage.run(session, cfg, FakeTerminal(["\r"]))
-    assert session.get(Decision, "t1").playlist_id == "pl_techno"
+    assert playlists_of(session, "t1") == {"pl_techno"}
 
 
 def test_enter_without_a_suggestion_decides_nothing(session):
@@ -130,7 +141,7 @@ def test_enter_without_a_suggestion_decides_nothing(session):
     term = FakeTerminal(["\r", "q"])
     triage.run(session, make_config([Rule("techno", "pl_techno")]), term)
     assert session.get(Decision, "t1").status is Status.pending
-    assert "no suggestion to accept" in term.text()
+    assert "nothing selected and nothing suggested" in term.text()
 
 
 def test_tracks_are_offered_newest_first(session):
@@ -154,7 +165,7 @@ def test_oldest_first_reverses_the_order(session):
 def test_each_decision_is_committed_before_the_next_track(session):
     """Quitting mid-session keeps every decision already made."""
     add_tracks(session, [("t1", []), ("t2", []), ("t3", [])])
-    triage.run(session, make_config(), FakeTerminal(["1", "s", "q"]))
+    triage.run(session, make_config(), FakeTerminal(["1", "\r", "s", "q"]))
 
     session.expire_all()
     assert session.get(Decision, "t1").status is Status.sorted
@@ -164,22 +175,22 @@ def test_each_decision_is_committed_before_the_next_track(session):
 
 def test_undo_reverts_the_previous_decision_and_shows_it_again(session):
     add_tracks(session, [("t1", []), ("t2", [])])
-    term = FakeTerminal(["1", "u", "2"])
+    term = FakeTerminal(["1", "\r", "u", "2", "\r"])
     summary = triage.run(session, make_config(), term)
 
     # t1 was sorted, undone, then sorted again into the other playlist
-    assert session.get(Decision, "t1").playlist_id == "pl_jazz"
+    assert playlists_of(session, "t1") == {"pl_jazz"}
     assert summary.undone == 1
     assert summary.sorted == 1
 
 
 def test_undo_returns_to_the_track_that_was_on_screen(session):
     add_tracks(session, [("t1", []), ("t2", [])])
-    term = FakeTerminal(["s", "u", "1", "2"])
+    term = FakeTerminal(["s", "u", "1", "\r", "2", "\r"])
     triage.run(session, make_config(), term)
 
-    assert session.get(Decision, "t1").playlist_id == "pl_techno"  # the undone one, redecided
-    assert session.get(Decision, "t2").playlist_id == "pl_jazz"    # the one interrupted by undo
+    assert playlists_of(session, "t1") == {"pl_techno"}  # the undone one, redecided
+    assert playlists_of(session, "t2") == {"pl_jazz"}    # the one interrupted by undo
 
 
 def test_undo_with_nothing_to_undo_says_so(session):
@@ -210,7 +221,7 @@ def test_unknown_key_shows_help_and_keeps_the_track(session):
     add_tracks(session, [("t1", [])])
     term = FakeTerminal(["x", "q"])
     triage.run(session, make_config(), term)
-    assert "keys: 1-9 playlist" in term.text()
+    assert "keys: 1-9 toggle playlist" in term.text()
     assert session.get(Decision, "t1").status is Status.pending
 
 
@@ -237,7 +248,7 @@ def test_already_decided_tracks_are_not_offered_again(session):
 def test_screen_shows_track_genres_and_suggestion(session):
     add_tracks(session, [("t1", ["minimal techno", "acid"])])
     cfg = make_config([Rule("techno", "pl_techno")])
-    term = FakeTerminal(["1"])
+    term = FakeTerminal(["1", "\r"])
     triage.run(session, cfg, term)
 
     screen = term.screens[0]
@@ -245,7 +256,7 @@ def test_screen_shows_track_genres_and_suggestion(session):
     assert "Artist" in screen
     assert "genres: minimal techno, acid" in screen
     assert "suggested: 1 Techno" in screen
-    assert any("1 Techno   2 Jazz" in line for line in screen)
+    assert any("1 Techno" in line and "2 Jazz" in line for line in screen)
 
 
 def test_screen_is_plain_text(session):
@@ -291,5 +302,97 @@ def test_track_without_a_decision_row_is_triaged(session):
         )
     )
     session.commit()
-    triage.run(session, make_config(), FakeTerminal(["1"]))
-    assert session.get(Decision, "orphan").playlist_id == "pl_techno"
+    triage.run(session, make_config(), FakeTerminal(["1", "\r"]))
+    assert playlists_of(session, "orphan") == {"pl_techno"}
+
+
+# --- several playlists per track ---------------------------------------------
+
+
+def test_a_track_can_go_into_several_playlists(session):
+    add_tracks(session, [("t1", [])])
+    summary = triage.run(session, make_config(), FakeTerminal(["1", "2", "\r"]))
+
+    assert playlists_of(session, "t1") == {"pl_techno", "pl_jazz"}
+    assert session.get(Decision, "t1").status is Status.sorted
+    assert (summary.sorted, summary.assignments) == (1, 2)
+
+
+def test_pressing_a_hotkey_twice_deselects_it(session):
+    add_tracks(session, [("t1", [])])
+    term = FakeTerminal(["1", "2", "1", "\r"])
+    triage.run(session, make_config(), term)
+    assert playlists_of(session, "t1") == {"pl_jazz"}
+
+
+def test_selection_is_shown_and_marked(session):
+    add_tracks(session, [("t1", [])])
+    term = FakeTerminal(["1", "\r"])
+    triage.run(session, make_config(), term)
+
+    after_toggle = term.screens[1]
+    assert "selected: Techno" in after_toggle
+    assert any(line.startswith("*1 Techno") for line in after_toggle)
+
+
+def test_selection_overrides_the_suggestion(session):
+    add_tracks(session, [("t1", ["techno"])])
+    cfg = make_config([Rule("techno", "pl_techno")])
+    triage.run(session, cfg, FakeTerminal(["2", "\r"]))
+    assert playlists_of(session, "t1") == {"pl_jazz"}
+
+
+def test_redeciding_replaces_the_previous_playlists(session):
+    add_tracks(session, [("t1", [])])
+    triage.run(session, make_config(), FakeTerminal(["1", "2", "\r", "u", "2", "\r"]))
+    assert playlists_of(session, "t1") == {"pl_jazz"}
+
+
+def test_undoing_the_only_track_does_not_show_it_twice(session):
+    add_tracks(session, [("t1", [])])
+    term = FakeTerminal(["1", "\r", "u", "2", "\r"])
+    summary = triage.run(session, make_config(), term)
+    assert playlists_of(session, "t1") == {"pl_jazz"}
+    assert summary.quit is False  # the queue really is empty afterwards
+
+
+def test_undo_clears_the_assignments(session):
+    add_tracks(session, [("t1", []), ("t2", [])])
+    summary = triage.run(session, make_config(), FakeTerminal(["1", "2", "\r", "u", "q"]))
+    assert playlists_of(session, "t1") == set()
+    assert session.get(Decision, "t1").status is Status.pending
+    assert (summary.sorted, summary.assignments) == (0, 0)
+
+
+def test_a_sorted_track_is_not_offered_again(session):
+    add_tracks(session, [("t1", [])])
+    triage.run(session, make_config(), FakeTerminal(["1", "\r"]))
+    summary = triage.run(session, make_config(), FakeTerminal(["2", "\r"]))
+    assert (summary.sorted, summary.assignments) == (0, 0)
+    assert playlists_of(session, "t1") == {"pl_techno"}
+
+
+def test_screen_shows_release_year_and_popularity(session):
+    add_tracks(session, [("t1", [])])
+    term = FakeTerminal(["s"])
+    triage.run(session, make_config(), term)
+    line = next(line for line in term.screens[0] if "added" in line)
+    assert "released 1998" in line
+    assert "popularity 42" in line
+
+
+def test_the_last_decision_can_still_be_undone(session):
+    """The queue empties after the final track; undo must still be reachable."""
+    add_tracks(session, [("t1", [])])
+    term = FakeTerminal(["s", "u", "1", "\r", "q"])
+    summary = triage.run(session, make_config(), term)
+
+    assert "nothing left to triage" in term.text()
+    assert playlists_of(session, "t1") == {"pl_techno"}
+    assert (summary.sorted, summary.skipped, summary.undone) == (1, 0, 1)
+
+
+def test_quitting_from_the_empty_screen_is_not_an_early_exit(session):
+    add_tracks(session, [("t1", [])])
+    summary = triage.run(session, make_config(), FakeTerminal(["s", "q"]))
+    assert summary.quit is False
