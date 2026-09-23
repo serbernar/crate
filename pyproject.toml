@@ -1,0 +1,31 @@
+[project]
+name = "crate"
+version = "0.1.0"
+description = "CLI for sorting Spotify Liked Songs into playlists"
+requires-python = ">=3.11"
+dependencies = [
+    "alembic>=1.13",
+    "click>=8.1",
+    "spotipy>=2.24",
+    "sqlalchemy>=2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+crate = "crate.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["crate*"]
+
+[tool.setuptools.package-data]
+crate = ["migrations/*.py", "migrations/*.mako", "migrations/versions/*.py"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error::DeprecationWarning:crate.*"]
